@@ -1,119 +1,130 @@
-# partition-resizing-tool-linux (`partresize`)
+# partresize
 
-Resize the partition that holds the **currently running** Linux system —
-including the root filesystem `/` — **without a USB stick, live CD, second
-operating system, or any external recovery environment.**
+A safety-first Linux partition and filesystem resizing tool, written in Rust.
 
+`partresize` resizes partitions **and** the filesystems inside them, choosing
+the safest possible workflow automatically. It understands the whole storage
+stack — partition table, LUKS, LVM, filesystem — and it **never reorders the
+steps in a way that can corrupt data**. When an operation cannot be performed
+safely on a mounted filesystem (for example, shrinking ext4), it does not force
+it: it either performs a proper offline resize (unmount → resize → remount) or
+schedules a reboot-assisted maintenance pass built from your own initramfs.
+
+```text
+partresize inspect /home
+partresize capabilities /home
+partresize plan   /home --size 300G          # never changes anything
+partresize resize /home --grow 50G           # online grow when supported
+partresize resize /home --size 300G --offline   # unmount, shrink, remount
+partresize resize /      --size 40G --schedule   # root: do it at next reboot
 ```
-sudo partresize grow /
-sudo partresize shrink / --size 80G
-sudo partresize resize / --size 150G
-```
 
-The tool figures out the safest way to carry out the request:
+> ⚠️ Partition resizing is inherently risky. `partresize` takes backups and
+> refuses unsafe operations, but it **cannot** guarantee recovery from hardware
+> failure or unexpected power loss. **Back up important data first.**
 
-* **Mode 1 — true online resize.** If the filesystem and storage stack support
-  the operation while mounted (e.g. growing ext4/btrfs/xfs), it is performed
-  immediately, no reboot.
-* **Mode 2 — reboot-assisted offline resize.** If the operation cannot be done
-  safely while `/` is mounted (e.g. shrinking ext4), the tool builds a
-  temporary maintenance environment **from your existing installation's own
-  initramfs**, schedules a one-time boot into it, performs the resize while the
-  root filesystem is not mounted, verifies, cleans up, and reboots you back
-  into your normal system.
+## Highlights
 
-It never tells you to "boot a live USB".
+- **Storage-stack aware.** Discovers `Disk → Partition → LUKS → LVM PV → VG →
+  LV → Filesystem → Mount` automatically via `lsblk`/`findmnt`/`blkid`.
+- **Correct ordering, always.** Shrink = *filesystem → block device → partition*;
+  grow = *partition → block device → filesystem*. Never the reverse.
+- **Honest capability matrix.** ext4 grows online but only shrinks offline; XFS
+  can only grow; Btrfs grows and shrinks online; the tool refuses what a
+  filesystem genuinely cannot do.
+- **Plan / execute separation.** A `plan` is an explicit, inspectable operation
+  graph produced before anything destructive happens. The executor only runs a
+  validated plan.
+- **Safe offline workflows.** `--offline` (non-root) unmounts, resizes, remounts.
+  `--schedule` builds a one-time initramfs maintenance boot for the root
+  filesystem — no USB, live CD, or second OS required.
+- **Backups & recovery.** Partition-table and LVM-metadata backups before
+  destructive work; a persistent state machine detects and recovers interrupted
+  operations.
+- **Dry-run everywhere.** `--dry-run` prints the exact commands and changes
+  nothing.
 
-## How the offline resize works without external media
+## Documentation
 
-Every Linux system already boots through a temporary root-in-RAM: the
-**initramfs**. The kernel runs it *before* mounting the real root filesystem —
-the one moment when the root block device exists but root is not mounted
-read-write. That is exactly the offline maintenance environment we need, and it
-is assembled entirely from the user's own installed system.
-
-1. **Build a separate maintenance initramfs** (`/boot/partresize-maint-<id>.img`)
-   — the system's real initramfs is never modified, so the normal boot path
-   always remains a safe fallback. The initramfs generator is auto-detected:
-   `initramfs-tools` (Debian/Ubuntu), `dracut` (Fedora/RHEL/SUSE), or
-   `mkinitcpio` (Arch). The generated image contains the resize script plus the
-   required tools (`e2fsprogs`, `sfdisk`, `lvm`, `cryptsetup`, …).
-2. **Add a one-time boot entry** with a marker on the kernel command line
-   (`partresize.maint=<id>`). GRUB → `grub-reboot` (one-shot); systemd-boot →
-   `bootctl set-oneshot`. The next boot enters maintenance; every boot after
-   returns to normal automatically.
-3. **Reboot.** A pre-mount hook sees the marker, refuses to mount the target
-   root, and runs the resize in the strict order
-   *fsck → shrink filesystem → shrink block-device/LV → shrink partition →
-   verify* (reversed, container-first, for a grow).
-4. **Persist state** in `/var/lib/partresize/state.json` — a real state machine
-   (`PREPARED → BOOTING_MAINTENANCE → CHECKING_FILESYSTEM → SHRINKING_FILESYSTEM
-   → RESIZING_BLOCK_DEVICE → RESIZING_PARTITION → VERIFYING → COMPLETED`, with
-   `FAILED` / `RECOVERY_REQUIRED`) — so a power loss mid-operation is detected
-   and recoverable on the next boot.
-5. **Clean up** the temporary image and boot entry, then reboot normally.
-
-## Commands
-
-| Command | Purpose |
+| Document | Contents |
 |---|---|
-| `partresize inspect /` | Show the discovered storage topology and sizes. |
-| `partresize capabilities /` | Show what the filesystem can/can't do online/offline. |
-| `partresize plan / --size 80G` | Show the full plan. **Never changes anything.** |
-| `partresize grow /` | Grow to fill available space. |
-| `partresize shrink / --size 80G` | Shrink to a target size. |
-| `partresize resize / --size 150G` | Grow or shrink to a target size. |
-| `partresize <op> … --dry-run` | Show exactly what would run, change nothing. |
-| `partresize status` | Show any in-progress operation. |
-| `partresize cancel` | Cancel a scheduled (not-yet-run) operation. |
-| `partresize recover` | Detect and recover an interrupted operation. |
+| [docs/architecture.md](docs/architecture.md) | Module layout, data flow, plan/execute model |
+| [docs/filesystems.md](docs/filesystems.md) | Per-filesystem capability matrix and limitations |
+| [docs/safety.md](docs/safety.md) | The safety model and every guard |
+| [docs/examples.md](docs/examples.md) | Worked examples for common scenarios |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Common errors and fixes |
+| [docs/developer.md](docs/developer.md) | Building, testing, contributing |
+| [man/partresize.8](man/partresize.8) | Manual page |
 
-## Storage stacks understood
+## Build
 
-The tool discovers the complete stack before planning, e.g.:
-
-```
-disk → partition → LUKS → LVM PV → VG → LV → ext4 → /
-disk → partition → ext4 → /
-disk → partition → btrfs → /
+```sh
+cargo build --release
+# binary at ./target/release/partresize
 ```
 
-Supported today, in priority order: **ext4** (grow online / shrink offline),
-**GPT & MBR** partition tables, **LVM**, **LUKS**, **Btrfs** (online grow +
-shrink), **XFS** (grow only — the tool refuses to "shrink" XFS because XFS
-cannot shrink).
+Only two dependencies (`serde`, `serde_json`); everything else is std.
 
-## Safety guarantees
+## Install
 
-* The filesystem is **always shrunk before** the partition — never the reverse.
-* The partition is never shrunk below the filesystem/containers it holds.
-* A shrink target must clear used data plus a safety margin and the filesystem's
-  own reported minimum size, or it is refused.
-* Growing never overwrites a neighbouring partition; if a partition would have
-  to be *moved* to grow, the tool reports it rather than doing it silently.
-* Partition-table and LVM-metadata backups are taken where possible.
-* Full `--dry-run` for every operation.
-
-## Development, testing and safety in tests
-
-The project is Python and orchestrates the standard Linux storage utilities.
-
-```
-python -m pytest            # unit + loop-device integration tests
-ruff check partresize/      # lint
+```sh
+sudo install -m 0755 target/release/partresize /usr/local/sbin/partresize
+sudo install -m 0644 man/partresize.8 /usr/local/share/man/man8/partresize.8
 ```
 
-Integration tests run against **disposable `disk.img` files attached as loop
-devices** — they create GPT/MBR tables, filesystems and simulated roots, and
-exercise real offline shrink/grow, recovery, and interrupted-resize handling.
+`partresize` calls standard utilities at run time. Install what your stack
+needs: `util-linux` (lsblk/findmnt/blkid/sfdisk/partprobe/blockdev),
+`e2fsprogs` (ext), `xfsprogs` (XFS), `btrfs-progs` (Btrfs), `lvm2` (LVM),
+`cryptsetup` (LUKS).
 
-A hard safety guard (`PARTRESIZE_TEST_MODE=1`, set for the whole suite) makes
-every destructive operation **reject any device that is not a loop / dm test
-device** — `/dev/sda`, `/dev/vda`, `/dev/nvme*` and friends raise immediately.
-The tests never touch the host's real disks, bootloader, initramfs, or root
-filesystem. Boot-integration code writes into a temporary prefix during tests.
+## Usage summary
 
-> Note: some paths (kernel online-resize ioctl, Btrfs/XFS/LVM/LUKS kernel
-> modules) are unavailable in minimal CI sandboxes; those tests skip
-> automatically and run on a real machine. The offline ext4 resize path — the
-> core of Mode 2 — is fully exercised on loop devices.
+```
+partresize <command> [options]
+
+  list                          List block devices
+  inspect <target>              Show the storage topology
+  capabilities <target>         Show what the filesystem can/can't do
+  plan <target> <size-opt>      Show the resize plan (never changes anything)
+  resize <target> <size-opt>    Resize a filesystem/partition
+  grow <target> [--by S|--size S]
+  shrink <target> --size S|--by S
+  backup-table <disk> [file]    Back up a partition table
+  restore-table <disk> <file>   Restore a partition table
+  status | cancel | recover     Manage an in-progress/scheduled operation
+
+Size options:  --size <S> | --grow <S> | --shrink <S> | --by <S>
+Flags:         --dry-run  --offline  --schedule  -y/--yes  -v/--verbose
+Sizes:         binary (KiB/MiB/GiB/TiB) and decimal (KB/MB/GB/TB); e.g. 300G, 80GiB
+```
+
+## Supported today
+
+- **Filesystems:** ext4/ext3/ext2 (grow online, shrink offline), XFS (grow only),
+  Btrfs (grow/shrink), swap (recreate). NTFS offline via `ntfsresize` is
+  scaffolded; FAT/exFAT are detected but not resized.
+- **Partition tables:** GPT and MBR (DOS).
+- **Layers:** plain partitions, LVM (PV/VG/LV), LUKS.
+- **Modes:** online grow; offline shrink/grow (immediate for non-root, scheduled
+  reboot for root); dry-run; backups; recovery.
+
+See [docs/filesystems.md](docs/filesystems.md) for the exact matrix and the list
+of operations that are intentionally **unsupported**.
+
+## Testing
+
+```sh
+cargo test            # unit tests + loopback integration tests (needs root)
+```
+
+Integration tests build disposable `disk.img` files on **loop devices** and run
+the real binary against them. `PARTRESIZE_TEST_MODE=1` arms a guard that refuses
+any non-loop/dm device, so the suite can never touch a real disk. See
+[docs/developer.md](docs/developer.md) for the exact commands.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+A Python prototype that pioneered the initramfs maintenance mechanism lives in
+[`contrib/python-prototype/`](contrib/python-prototype/) for reference.

@@ -1,0 +1,25 @@
+[package]
+name = "partresize"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "Safety-first Linux partition and filesystem resizing tool"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/M0rPh39s/partition-resizing-tool-linux"
+default-run = "partresize"
+
+[[bin]]
+name = "partresize"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 2
+lto = true
+strip = true
+
+[lints.rust]
+unsafe_code = "forbid"

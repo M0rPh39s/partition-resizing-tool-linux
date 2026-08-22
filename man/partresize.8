@@ -1,0 +1,133 @@
+.TH PARTRESIZE 8 "2026" "partresize 0.1.0" "System Administration"
+.SH NAME
+partresize \- safety-first Linux partition and filesystem resizing
+.SH SYNOPSIS
+.B partresize
+.I command
+.RI [ target ]
+.RI [ options ]
+.SH DESCRIPTION
+.B partresize
+resizes partitions and the filesystems inside them, choosing the safest
+workflow automatically. It discovers the full storage stack (partition table,
+LUKS, LVM, filesystem), keeps a conservative capability matrix, and never
+reorders steps in a way that can corrupt data. Operations that cannot be done
+safely on a mounted filesystem are performed offline (unmount/resize/remount)
+or scheduled for a one-time reboot-assisted maintenance pass built from the
+system's own initramfs \(em no external media required.
+.SH COMMANDS
+.TP
+.B list
+List block devices.
+.TP
+.B inspect \fItarget\fR
+Show the resolved storage topology and current sizes.
+.TP
+.B capabilities \fItarget\fR
+Show whether the filesystem can grow/shrink online/offline.
+.TP
+.B plan \fItarget\fR \fIsize-option\fR
+Show the ordered operation plan. Never changes anything.
+.TP
+.B resize \fItarget\fR \fIsize-option\fR
+Resize the filesystem/partition of \fItarget\fR.
+.TP
+.B grow \fItarget\fR [\fB--by\fR \fIS\fR | \fB--size\fR \fIS\fR]
+Grow to fill free space, or by/to a size.
+.TP
+.B shrink \fItarget\fR \fB--size\fR \fIS\fR | \fB--by\fR \fIS\fR
+Shrink to/by a size (offline as required).
+.TP
+.B backup-table \fIdisk\fR [\fIfile\fR]
+Write a restorable dump of the partition table.
+.TP
+.B restore-table \fIdisk\fR \fIfile\fR
+Restore a partition table from a dump.
+.TP
+.B status \fR|\fB cancel \fR|\fB recover
+Show, cancel, or recover an in-progress/scheduled operation.
+.SH SIZE OPTIONS
+.TP
+.B --size \fIS\fR
+Absolute target size.
+.TP
+.B --grow \fIS\fR
+Grow by \fIS\fR (omit \fIS\fR with \fBgrow\fR to fill free space).
+.TP
+.B --shrink \fIS\fR
+Shrink by \fIS\fR.
+.TP
+.B --by \fIS\fR
+Amount for the \fBgrow\fR/\fBshrink\fR subcommands.
+.PP
+Sizes accept binary (KiB, MiB, GiB, TiB) and decimal (KB, MB, GB, TB) units;
+a bare K/M/G/T is binary. Examples: 300G, 80GiB, 1000MB.
+.SH OPTIONS
+.TP
+.B --dry-run
+Print exactly what would happen; change nothing.
+.TP
+.B --offline
+Perform an offline resize now (non-root: unmount, resize, remount).
+.TP
+.B --schedule
+Prepare an offline resize for the next reboot (works for the root filesystem).
+.TP
+.B -y, --yes
+Do not prompt for confirmation.
+.TP
+.B -v, --verbose
+Print each external command as it runs.
+.SH TARGET
+A mount point (\fI/home\fR, \fI/\fR) or a block device
+(\fI/dev/nvme0n1p3\fR, \fI/dev/mapper/vg-home\fR). The tool resolves the target
+to its filesystem's backing device; it will not resize a whole disk given in
+place of a partition.
+.SH SAFETY
+Destructive operations require root and an explicit confirmation (or
+.BR --yes ).
+The filesystem is always shrunk before the partition; a partition is never made
+smaller than the filesystem it holds; and
+.I filesystem_size \(<= block_device_size
+is enforced throughout. Partition-table and LVM-metadata backups are taken
+before destructive shrinks. See
+.B docs/safety.md\fR.
+.SH ENVIRONMENT
+.TP
+.B PARTRESIZE_STATE_DIR
+Directory for operation state and backups (default
+.IR /var/lib/partresize ).
+.TP
+.B PARTRESIZE_TEST_MODE
+When set to 1, refuse any device that is not a loop/dm test device.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Error (see message).
+.TP
+.B 2
+Plan is infeasible / operation refused.
+.SH FILES
+.TP
+.I /var/lib/partresize/state.json
+Persistent operation state for recovery.
+.TP
+.I /var/lib/partresize/backups/<op-id>/
+Partition-table and LVM-metadata backups.
+.SH CAVEATS
+Partition resizing is inherently risky.
+.B partresize
+cannot guarantee recovery from hardware failure or unexpected power loss.
+Back up important data first.
+.SH SEE ALSO
+.BR lsblk (8),
+.BR sfdisk (8),
+.BR resize2fs (8),
+.BR xfs_growfs (8),
+.BR btrfs (8),
+.BR lvreduce (8),
+.BR lvextend (8),
+.BR cryptsetup (8)

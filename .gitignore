@@ -1,9 +1,13 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Python prototype
 __pycache__/
 *.py[cod]
 *.egg-info/
-.eggs/
-build/
-dist/
 .pytest_cache/
 .ruff_cache/
+
+# scratch
 *.img
