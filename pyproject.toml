@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "partresize"
+version = "0.1.0"
+description = "Resize the partition of a running Linux system without external media"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "See LICENSE" }
+authors = [{ name = "partition-resizing-tool-linux contributors" }]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Filesystems",
+]
+
+[project.scripts]
+partresize = "partresize.cli:main"
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+include = ["partresize*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501", "B008", "UP038"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "root: tests that require root privileges and loop devices",
+]
